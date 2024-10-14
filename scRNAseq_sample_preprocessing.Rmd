@@ -1,0 +1,369 @@
+---
+title: "01. Sample preprocessing"
+date: "`r format(Sys.time(),  '%d %B %Y')`"
+author: "Mohamed Hassan"
+output:
+  html_notebook:
+    theme: cerulean
+    toc: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 72
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = T, results = "hide")
+require("knitr")
+## Adjust your diectory for the rest of the analysis
+
+# opts_knit$set(root.dir = "/")
+```
+
+Setting a random seed to ensure results reproducibility
+```{r random-seed-setting}
+set.seed(12345)
+```
+
+```{r loading-libraries, results='hide'}
+pacman::p_load(tidyverse, Seurat, styler, remotes, DoubletFinder, stringr, patchwork)
+```
+
+# Adding useful functions if needed to be used
+```{r}
+"%out%" <- Negate("%in%")
+```
+
+
+# 1. Reading objects
+```{r}
+path_to_raw_files <- "/path/to/Raw_Files/"
+## The structre of the Raw_Files folder should contain subfolders, each named according to the sample identifier
+## Within each sample, three files are required "barcodes, features, and matrix"
+
+files <- list.files(path_to_raw_files)
+
+
+# Iterate over each file to read the data and create Seurat objects
+Mouse_sorted_ECs_list <- lapply(files, function(file) {
+  # Construct the full path to the file
+  file_path <- file.path(path_to_raw_files, file)
+  
+  # Read the data
+  data <- Read10X(data.dir = file_path)
+  
+  # Create the Seurat object
+  seurat_obj <- CreateSeuratObject(counts = data, project = file, )
+  seurat_obj <- RenameCells(seurat_obj, str_c(seurat_obj$orig.ident, 
+                                              rownames(seurat_obj@meta.data),
+                                              sep = "_"))
+  
+  return(seurat_obj)
+})
+
+# Name each element of the list with the corresponding file name
+names(Mouse_sorted_ECs_list) <- files
+
+```
+
+## Adding Mt% and Rb%
+
+```{r}
+## Adapt this function based on the scCustomize version you have (i.e in the new version its called Add_Mito_Ribo)
+Mouse_sorted_ECs_list <- lapply(Mouse_sorted_ECs_list, scCustomize::Add_Mito_Ribo_Seurat, 
+                          mito_name = "Mt", ribo_name = "Rb", 
+                          mito_ribo_name = "Mt_Rb", species = "Human")
+## Adjust the species argument and use the organism in use (e.g Mouse) 
+```
+
+## Violin plots for quality check
+
+```{r,fig.height=10,fig.width=10}
+lapply(Mouse_sorted_ECs_list, VlnPlot, 
+       features = c("nCount_RNA", "nFeature_RNA", "Mt", "Rb"),
+       ncol = 4)
+```
+
+## Scatter plots for quality check
+
+```{r}
+lapply(Mouse_sorted_ECs_list, FeatureScatter, 
+       feature1 = "nCount_RNA", 
+       feature2 = "nFeature_RNA")
+
+```
+
+```{r unlisting-samples_2}
+for (i in 1:length(Mouse_sorted_ECs_list)) {
+  object_name <- names(Mouse_sorted_ECs_list[i])
+  assign(object_name, Mouse_sorted_ECs_list[[i]])
+}
+```
+
+
+```{r}
+lower_limit <- 200
+
+## set your upper limit for each sample 
+upper_limit <- 5000
+```
+
+```{r}
+## For each sample
+
+## sample1
+sample1 <- subset(sample1, nCount_RNA > lower_limit & nCount_RNA <   & 
+                  nFeature_RNA > lower_limit & nFeature_RNA <  & Mt < ) 
+## sample2
+sample2 <- subset(sample2, nCount_RNA > lower_limit & nCount_RNA <   & 
+                  nFeature_RNA > lower_limit & nFeature_RNA <  & Mt < ) 
+```
+
+```{r}
+## Add more samples if you have more than two, and with their corresponding names
+sample_list = list("sample1"=sample1, 
+                            "sample2"=sample2)
+```
+
+
+## Removing **ribosomal** genes
+### If you want to remove specific genes before the downstream analysis (Ribosomal/Mitochondrial/..etc)
+
+```{r}
+sample_list_NoRibo <- lapply(sample_list, function(x) {subset(x, 
+       features = grep(pattern = "^RP[L|S]", x = rownames(x),
+                                invert = T))
+})
+```
+
+## Removing **mitochondrial** genes
+
+```{r}
+raw_sample_list_NoRbMt <- lapply(raw_sample_list_NoRibo, function(x) {subset(x, 
+       features = grep(pattern = "^MT-", x = rownames(x),
+                                invert = T))
+})
+```
+
+## Removing **MALAT1,NEAT1** genes
+
+```{r}
+raw_sample_list_NoRbMt_lnc <- lapply(raw_sample_list_NoRbMt, function(x)
+  {subset(x, 
+       features = grep(pattern = "^MALAT1|NEAT1", x = rownames(x),
+                                invert = T))})
+```
+
+## Removing **Hemoglobin** genes
+
+```{r}
+## Hemoglobin genes are removed as they resemble contamination, depending on which species being used
+
+# hemoglobin_genes <- c("HbA", "Hba-a2", "Hbb-b1", "Hbb-b2", "Hbb-y",
+#                       "Hbb-e1", "Hbd", "Hbg1", "Hbg2")
+
+# hemoglobin_genes <- c("HBB", "HBG2", "HBZ", "HBA2", "HBA1",
+#                       "HBM", "HBD", "HBE1", "HBQ1", "HBG1")
+
+raw_sample_list_NoRbMt_genes <- lapply(raw_sample_list_NoRbMt_lnc, function(x){
+  subset(x, 
+         features = rownames(x)[!(rownames(x) %in% hemoglobin_genes)])
+})
+```
+
+
+```{r unlisting-samples}
+for (i in 1:length(raw_sample_list_NoRbMt_genes)) {
+  object_name <- names(raw_sample_list_NoRbMt_genes[i])
+  assign(object_name, raw_sample_list_NoRbMt_genes[[i]])
+}
+```
+###################################################################################################################################################
+## Filtering by linear model (UMIs vs Genes)
+
+#### sample1
+
+```{r}
+lin_mod <- lm(log(sample1@meta.data$nFeature_RNA) ~ log(sample1@meta.data$nCount_RNA))
+sub <- lin_mod$model[lin_mod$residuals < -0.5,]
+plot (log(sample1@meta.data$nCount_RNA),log(sample1@meta.data$nFeature_RNA), xlab ="log (nCount_RNA)",ylab="log (nFeature_RNA)",pch=20,col="grey")
+abline (lin_mod,col="red",lwd=3)
+points (sub[,2], sub[,1],pch=20,col="blue")
+tokeep <- as.numeric(names(lin_mod$residuals[lin_mod$residuals >= -0.5]))
+sample1 <- subset(sample1, cells = tokeep)
+```
+
+#### sample2
+
+```{r}
+lin_mod <- lm(log(sample2@meta.data$nFeature_RNA) ~ log(sample2@meta.data$nCount_RNA))
+sub <- lin_mod$model[lin_mod$residuals < -0.5,]
+plot (log(sample2@meta.data$nCount_RNA),log(sample2@meta.data$nFeature_RNA), xlab ="log (nCount_RNA)",ylab="log (nFeature_RNA)",pch=20,col="grey")
+abline (lin_mod,col="red",lwd=3)
+points (sub[,2], sub[,1],pch=20,col="blue")
+tokeep <- as.numeric(names(lin_mod$residuals[lin_mod$residuals >= -0.5]))
+sample2 <- subset(sample2, cells = tokeep)
+```
+
+# Removing doublets (DoubletFinder)
+
+#### sample1
+
+if using the new version of DoubletFinder, adjust the functions that end with _v3 
+
+```{r}
+sample1DoubletPerc <- 0.008*(ncol(sample1)/1000)
+sample1DoubletPerc
+```
+
+```{r}
+sample1 <- sample1 %>% NormalizeData(normalization.method = "LogNormalize", scale.factor = 10000) %>% FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% ScaleData(vars.to.regress = c("nCount_RNA", "nFeature_RNA")) %>% RunPCA(npcs = 100)
+
+ElbowPlot(sample1, ndims = 50)
+
+### Determining the number of significant PCs
+pct <- sample1@reductions$pca@stdev / sum(sample1@reductions$pca@stdev) * 100
+cum <- cumsum(pct)
+co1 <- which(cum > 90 & pct < 5)[1]
+co2 <- sort(which((pct[1:length(pct) -1] - pct[2:length(pct)]) > 0.05), decreasing = T)[1] + 1
+pcs = min(co1, co2)
+sig_pcs <- 1:pcs
+
+sweep.res.list_sample1 <- paramSweep_v3(sample1, PCs = sig_pcs, sct = FALSE)
+sweep.stats_sample1 <- summarizeSweep(sweep.res.list_sample1, GT = FALSE)
+bcmvn_sample1 <- find.pK(sweep.stats_sample1)
+
+sample1 <- FindNeighbors(sample1, dims = sig_pcs, reduction = "pca", features = VariableFeatures(sample1))
+sample1 <- FindClusters(sample1)
+
+
+homotypic.prop_sample1 <- modelHomotypic(sample1@meta.data$seurat_clusters)   
+nExp_poi_sample1 <- round(sample1DoubletPerc*nrow(sample1@meta.data))
+nExp_poi.adj_sample1 <- round(nExp_poi_sample1*(1-homotypic.prop_sample1))
+
+
+pK_sample1 = as.numeric(as.character(bcmvn_sample1$pK))
+BCmetric_sample1 = bcmvn_sample1$BCmetric
+pK_choose_sample1 = pK_sample1[which(BCmetric_sample1 %in% max(BCmetric_sample1))]
+
+par(mar=c(5,4,4,8)+1,cex.main=1.2,font.main=2)
+plot(x = pK_sample1, y = BCmetric_sample1, pch = 16,type="b",
+col = "blue",lty=1)
+abline(v=pK_choose_sample1,lwd=2,col='red',lty=2)
+title("The BCmvn distributions")
+text(pK_choose_sample1,max(BCmetric_sample1),as.character(pK_choose_sample1),pos = 4,col = "red")
+```
+
+```{r}
+sample1 <- doubletFinder_v3(sample1, PCs = sig_pcs, pN = 0.25, pK = pK_choose_sample1, nExp = nExp_poi.adj_sample1, reuse.pANN = FALSE, sct = FALSE)
+sample1 <- RunUMAP(sample1, dims = sig_pcs,reduction = "pca", verbose = FALSE)
+```
+
+```{r}
+DF <- colnames(sample1@meta.data)[grep(pattern = "^DF", 
+                                   colnames(sample1@meta.data))]
+DimPlot(sample1, group.by=DF)
+```
+
+```{r}
+sample1
+singlet_cells <- sample1@meta.data %>% select(starts_with("DF")) %>% filter(. == "Singlet") %>% rownames()
+sample1 <- subset(sample1, cells = singlet_cells)
+sample1 
+```
+
+#### sample2
+
+```{r}
+sample2DoubletPerc <- 0.008*(ncol(sample2)/1000)
+sample2DoubletPerc
+```
+
+```{r}
+sample2 <- sample2 %>% NormalizeData(normalization.method = "LogNormalize", scale.factor = 10000) %>% FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% ScaleData(vars.to.regress = c("nCount_RNA", "nFeature_RNA")) %>% RunPCA(npcs = 100)
+
+ElbowPlot(sample2, ndims = 50)
+
+### Determining the number of significant PCs
+pct <- sample2@reductions$pca@stdev / sum(sample2@reductions$pca@stdev) * 100
+cum <- cumsum(pct)
+co1 <- which(cum > 90 & pct < 5)[1]
+co2 <- sort(which((pct[1:length(pct) -1] - pct[2:length(pct)]) > 0.05), decreasing = T)[1] + 1
+pcs = min(co1, co2)
+sig_pcs <- 1:pcs
+
+
+sweep.res.list_sample2 <- paramSweep_v3(sample2, PCs = sig_pcs, sct = FALSE)
+sweep.stats_sample2 <- summarizeSweep(sweep.res.list_sample2, GT = FALSE)
+bcmvn_sample2 <- find.pK(sweep.stats_sample2)
+
+sample2 <- FindNeighbors(sample2, dims = sig_pcs, reduction = "pca", features = VariableFeatures(sample2))
+sample2 <- FindClusters(sample2)
+
+
+homotypic.prop_sample2 <- modelHomotypic(sample2@meta.data$seurat_clusters)   
+nExp_poi_sample2 <- round(sample2DoubletPerc*nrow(sample2@meta.data))
+nExp_poi.adj_sample2 <- round(nExp_poi_sample2*(1-homotypic.prop_sample2))
+
+
+pK_sample2 = as.numeric(as.character(bcmvn_sample2$pK))
+BCmetric_sample2 = bcmvn_sample2$BCmetric
+pK_choose_sample2 = pK_sample2[which(BCmetric_sample2 %in% max(BCmetric_sample2))]
+
+par(mar=c(5,4,4,8)+1,cex.main=1.2,font.main=2)
+plot(x = pK_sample2, y = BCmetric_sample2, pch = 16,type="b",
+col = "blue",lty=1)
+abline(v=pK_choose_sample2,lwd=2,col='red',lty=2)
+title("The BCmvn distributions")
+text(pK_choose_sample2,max(BCmetric_sample2),as.character(pK_choose_sample2),pos = 4,col = "red")
+```
+
+```{r}
+sample2 <- doubletFinder_v3(sample2, PCs = sig_pcs, pN = 0.25, pK = pK_choose_sample2, nExp = nExp_poi.adj_sample2, reuse.pANN = FALSE, sct = FALSE)
+sample2 <- RunUMAP(sample2, dims = sig_pcs,reduction = "pca", verbose = FALSE)
+```
+
+```{r}
+DF <- colnames(sample2@meta.data)[grep(pattern = "^DF", 
+                                   colnames(sample2@meta.data))]
+DimPlot(sample2, group.by=DF)
+```
+
+```{r}
+sample2
+singlet_cells <- sample2@meta.data %>% select(starts_with("DF")) %>% filter(. == "Singlet") %>% rownames()
+sample2 <- subset(sample2, cells = singlet_cells)
+sample2 
+```
+
+###################################################################################################################################################
+
+# Merging all samples
+
+```{r}
+Merged_raw_object <- merge(sample1, c(sample2))
+Merged_raw_object
+```
+
+# Adding metadata information
+```{r}
+df_Merged_raw_object <- Merged_raw_object@meta.data %>% as.data.frame()
+## Removing unwanted columns
+df_Merged_raw_object <- df_Merged_raw_object %>% select(orig.ident:Mt_Rb)
+
+## Adding Study info
+
+```
+
+```{r}
+Merged_raw_object@meta.data <- df_Merged_raw_object
+```
+
+```{r}
+saveRDS(Merged_raw_object, "Merged_raw_object.RDS")
+```
+
+
+
+
+
+
