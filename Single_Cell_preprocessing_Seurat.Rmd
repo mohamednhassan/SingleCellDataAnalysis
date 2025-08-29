@@ -1,0 +1,358 @@
+---
+title: "Miranda sample preprocessing"
+date: "`r format(Sys.time(),  '%d %B %Y')`"
+author: "Mohamed Hassan"
+output:
+  html_notebook:
+    theme: cerulean
+    toc: true
+    toc_depth: 3
+editor_options:
+  markdown:
+    wrap: 72
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = T, results = "hide")
+require("knitr")
+## Adjust your diectory for the rest of the analysis
+
+opts_knit$set(root.dir = "/path/")
+```
+
+Setting a random seed to ensure results reproducibility
+```{r random-seed-setting}
+set.seed(12345)
+```
+
+```{r loading-libraries, results='hide'}
+pacman::p_load(tidyverse, Seurat, styler, remotes, DoubletFinder, stringr, patchwork)
+```
+
+# Adding useful functions if needed to be used
+```{r}
+"%out%" <- Negate("%in%")
+```
+
+
+# 1. Reading objects
+```{r}
+path_to_raw_files <- "/path_to/data/"
+
+files <- list.files(path_to_raw_files)
+
+samples_list <- lapply(files, function(file) {
+  file_path <- file.path(path_to_raw_files, file)
+
+  cat("Reading sample:", file, "\n")
+  # Read 10X data
+  data <- Read10X(data.dir = file_path)
+  
+  cat("Creating Seurat Object:", file, "\n")
+  # Create Seurat object
+  seurat_obj <- CreateSeuratObject(counts = data, project = file, 
+                                   min.features = 400) # as per the paper
+  cat("Seurat Object Created for: ", file, "\n")
+  
+  # Rename cells with sample prefix
+  seurat_obj <- RenameCells(seurat_obj, 
+                            new.names = str_c(seurat_obj$orig.ident, 
+                                              rownames(seurat_obj@meta.data), 
+                                              sep = "_"))
+
+  cat("Finished sample:", file, "\n\n")
+
+  return(seurat_obj)
+})
+
+# Name the list entries
+names(samples_list) <- files
+
+
+```
+
+## Adding Mt% and Rb%
+
+```{r}
+## Adapt this function based on the scCustomize version you have (i.e in the new version its called Add_Mito_Ribo)
+samples_list <- lapply(samples_list, scCustomize::Add_Mito_Ribo_Seurat, 
+                          mito_name = "Mt", ribo_name = "Rb", 
+                          mito_ribo_name = "Mt_Rb", species = "Human")
+## Adjust the species argument and use the organism in use (e.g Mouse) 
+```
+
+## Violin plots for quality check
+
+```{r,fig.height=5,fig.width=10}
+lapply(samples_list, VlnPlot, 
+       features = c("nCount_RNA", "nFeature_RNA", "Mt", "Rb"),ncol = 4)
+```
+
+## Scatter plots for quality check
+
+```{r}
+lapply(samples_list, FeatureScatter, 
+       feature1 = "nCount_RNA", 
+       feature2 = "nFeature_RNA")
+
+```
+
+```{r}
+samples_list
+```
+
+```{r}
+samples_list
+```
+
+
+## Filtering cells
+```{r}
+samples_list[1]  <- subset(samples_list[1],  
+                               nCount_RNA <  & nFeature_RNA < )
+```
+
+
+```{r}
+samples_list
+```
+
+
+
+## Removing **ribosomal** genes
+### If you want to remove specific genes before the downstream analysis (Ribosomal/Mitochondrial/..etc)
+
+```{r}
+sample_list_NoRibo <- lapply(sample_list, function(x) {subset(x, 
+       features = grep(pattern = "^RP[L|S]", x = rownames(x),
+                                invert = T))
+})
+```
+
+## Removing **mitochondrial** genes
+
+```{r}
+raw_sample_list_NoRbMt <- lapply(raw_sample_list_NoRibo, function(x) {subset(x, 
+       features = grep(pattern = "^MT-", x = rownames(x),
+                                invert = T))
+})
+```
+
+## Removing **MALAT1,NEAT1** genes
+
+```{r}
+samples_list <- lapply(samples_list, function(x)
+  {subset(x, 
+       features = grep(pattern = "^MALAT1|NEAT1", x = rownames(x),
+                                invert = T))})
+```
+
+## Removing **Hemoglobin** genes
+
+```{r}
+Hemoglobin genes are removed as they resemble contamination, depending on which species being used
+## Mouse
+hemoglobin_genes <- c("HbA", "Hba-a2", "Hbb-b1", "Hbb-b2", "Hbb-y",
+                      "Hbb-e1", "Hbd", "Hbg1", "Hbg2")
+
+## Human
+hemoglobin_genes <- c("HBB", "HBG2", "HBZ", "HBA2", "HBA1",
+                      "HBM", "HBD", "HBE1", "HBQ1", "HBG1")
+
+samples_list <- lapply(samples_list, function(x){
+  subset(x, 
+         features = rownames(x)[!(rownames(x) %in% hemoglobin_genes)])
+})
+```
+
+
+###################################################################################################################################################
+## Filtering by linear model (UMIs vs Genes)
+###################################################################################################################################################
+
+
+```{r}
+filter_plot_original <- function(seurat_obj, sample_name, threshold = -0.5) {
+  lin_mod <- lm(log(seurat_obj@meta.data$nFeature_RNA) ~ log(seurat_obj@meta.data$nCount_RNA))
+  sub <- lin_mod$model[lin_mod$residuals < threshold,]
+  
+  plot(log(seurat_obj@meta.data$nCount_RNA),
+       log(seurat_obj@meta.data$nFeature_RNA),
+       xlab = "log (nCount_RNA)", ylab = "log (nFeature_RNA)",
+       pch = 20, col = "grey", main = sample_name)
+  abline(lin_mod, col = "red", lwd = 3)
+  points(sub[,2], sub[,1], pch = 20, col = "blue")
+  
+  tokeep <- as.numeric(names(lin_mod$residuals[lin_mod$residuals >= threshold]))
+  
+  if (length(tokeep) == 0) {
+    warning(paste("No cells retained after filtering in:", sample_name))
+    return(seurat_obj)  # return unfiltered object to keep workflow going
+  }
+  
+  seurat_obj <- subset(seurat_obj, cells = tokeep)
+  return(seurat_obj)
+  DefaultAssay(seurat_obj) <- "RNA"
+}
+
+```
+
+
+```{r}
+samples_list <- mapply(function(obj, name) {
+  filter_plot_original(obj, sample_name = name)
+}, samples_list, names(samples_list), SIMPLIFY = FALSE)
+
+```
+
+
+
+# Removing doublets (DoubletFinder)
+
+if using the new version of DoubletFinder, adjust the functions that end with _v3 
+```{r}
+library(progress)
+library(dplyr)
+
+run_doublet_finder_with_stats <- function(seurat_obj, sample_name) {
+  message(paste("Running DoubletFinder for:", sample_name))
+  
+  n_cells_start <- ncol(seurat_obj)
+  
+  dbl_rate <- 0.008 * (n_cells_start / 1000)
+  
+  seurat_obj <- seurat_obj %>%
+    NormalizeData(normalization.method = "LogNormalize", scale.factor = 10000) %>%
+    FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>%
+    ScaleData(vars.to.regress = c("nCount_RNA", "nFeature_RNA")) %>%
+    RunPCA(npcs = 100, verbose = FALSE)
+  
+  pct <- seurat_obj@reductions$pca@stdev / sum(seurat_obj@reductions$pca@stdev) * 100
+  cum <- cumsum(pct)
+  co1 <- which(cum > 90 & pct < 5)[1]
+  co2 <- sort(which((pct[1:(length(pct) - 1)] - pct[2:length(pct)]) > 0.05), decreasing = TRUE)[1] + 1
+  pcs <- min(co1, co2)
+  sig_pcs <- 1:pcs
+  
+  sweep.res <- paramSweep_v3(seurat_obj, PCs = sig_pcs, sct = FALSE)
+  sweep.stats <- summarizeSweep(sweep.res, GT = FALSE)
+  bcmvn <- find.pK(sweep.stats)
+  
+  pK_vals <- as.numeric(as.character(bcmvn$pK))
+  BCmetric <- bcmvn$BCmetric
+  pK_opt <- pK_vals[which(BCmetric %in% max(BCmetric))]
+  
+  plot(pK_vals, BCmetric, pch = 16, type = "b", col = "blue",
+       lty = 1, main = paste("BCmvn distributions:", sample_name),
+       xlab = "pK", ylab = "BCmetric")
+  abline(v = pK_opt, lwd = 2, col = "red", lty = 2)
+  text(pK_opt, max(BCmetric), labels = as.character(pK_opt), pos = 4, col = "red")
+  
+  seurat_obj <- FindNeighbors(seurat_obj, dims = sig_pcs, reduction = "pca",
+                              features = VariableFeatures(seurat_obj))
+  seurat_obj <- FindClusters(seurat_obj)
+  
+  homotypic.prop <- modelHomotypic(seurat_obj@meta.data$seurat_clusters)
+  nExp_poi <- round(dbl_rate * n_cells_start)
+  nExp_poi.adj <- round(nExp_poi * (1 - homotypic.prop))
+  
+  seurat_obj <- doubletFinder_v3(
+    seurat_obj,
+    PCs = sig_pcs,
+    pN = 0.25,
+    pK = pK_opt,
+    nExp = nExp_poi.adj,
+    reuse.pANN = FALSE,
+    sct = FALSE
+  )
+  
+  DF_col <- grep("^DF", colnames(seurat_obj@meta.data), value = TRUE)
+  DimPlot(seurat_obj, group.by = DF_col) + ggtitle(paste("DoubletFinder:", sample_name))
+  
+  singlet_cells <- rownames(seurat_obj@meta.data[seurat_obj@meta.data[[DF_col]] == "Singlet", ])
+  
+  n_cells_after <- length(singlet_cells)
+  
+  if (n_cells_after == 0) {
+    warning(paste("No singlets detected in:", sample_name))
+    return(list(object = seurat_obj, summary = data.frame(sample = sample_name, before = n_cells_start, after = 0, removed = n_cells_start)))
+  }
+  
+  seurat_obj <- subset(seurat_obj, cells = singlet_cells)
+  
+  summary_stats <- data.frame(
+    sample = sample_name,
+    before = n_cells_start,
+    after = n_cells_after,
+    removed = n_cells_start - n_cells_after
+  )
+  
+  return(list(object = seurat_obj, summary = summary_stats))
+}
+
+# Progress bar wrapper over your samples_list:
+run_doublet_all <- function(samples_list) {
+  pb <- progress_bar$new(format = "  Processing [:bar] :percent eta: :eta", total = length(samples_list))
+  
+  results <- lapply(names(samples_list), function(nm) {
+    pb$tick()
+    run_doublet_finder_with_stats(samples_list[[nm]], nm)
+  })
+  
+  # Separate objects and summaries
+  filtered_objs <- lapply(results, `[[`, "object")
+  names(filtered_objs) <- names(samples_list)
+  
+  summary_table <- do.call(rbind, lapply(results, `[[`, "summary"))
+  
+  return(list(filtered_objects = filtered_objs, summary = summary_table))
+}
+```
+
+
+
+```{r}
+# Run the full thing
+results <- run_doublet_all(samples_list)
+
+# Access filtered Seurat objects
+samples_list <- results$filtered_objects
+
+# View summary stats
+print(results$summary)
+```
+
+```{r}
+results$summary %>% as.data.frame %>% writexl::write_xlsx("doubletInfo_Miranda.xlsx")
+```
+
+```{r}
+samples_list
+```
+
+###################################################################################################################################################
+
+# Merging all samples
+
+```{r}
+Merged_raw_object <- Reduce(merge, samples_list)
+Merged_raw_object
+```
+
+# Adding metadata information
+```{r}
+df_Merged_raw_object <- Merged_raw_object@meta.data %>% as.data.frame()
+## Removing unwanted columns
+df_Merged_raw_object <- df_Merged_raw_object %>% select(orig.ident:Mt_Rb)
+
+
+```
+
+```{r}
+Merged_raw_object@meta.data <- df_Merged_raw_object
+```
+
+```{r}
+saveRDS(Merged_raw_object, "/home/mhassan/R_Projects/Multiome/Miranda/Merged_raw_object.RDS")
+```
+
+
