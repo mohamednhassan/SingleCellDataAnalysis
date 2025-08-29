@@ -1,5 +1,5 @@
 ---
-title: "Miranda sample preprocessing"
+title: "sample preprocessing"
 date: "`r format(Sys.time(),  '%d %B %Y')`"
 author: "Mohamed Hassan"
 output:
@@ -34,7 +34,7 @@ pacman::p_load(tidyverse, Seurat, styler, remotes, DoubletFinder, stringr, patch
 ```
 
 
-# 1. Reading objects
+# 1. Reading raw files and creating Seurat objects
 ```{r}
 path_to_raw_files <- "/path_to/data/"
 
@@ -66,12 +66,9 @@ samples_list <- lapply(files, function(file) {
 
 # Name the list entries
 names(samples_list) <- files
-
-
 ```
 
 ## Adding Mt% and Rb%
-
 ```{r}
 ## Adapt this function based on the scCustomize version you have (i.e in the new version its called Add_Mito_Ribo)
 samples_list <- lapply(samples_list, scCustomize::Add_Mito_Ribo_Seurat, 
@@ -100,11 +97,6 @@ lapply(samples_list, FeatureScatter,
 samples_list
 ```
 
-```{r}
-samples_list
-```
-
-
 ## Filtering cells
 ```{r}
 samples_list[1]  <- subset(samples_list[1],  
@@ -115,8 +107,6 @@ samples_list[1]  <- subset(samples_list[1],
 ```{r}
 samples_list
 ```
-
-
 
 ## Removing **ribosomal** genes
 ### If you want to remove specific genes before the downstream analysis (Ribosomal/Mitochondrial/..etc)
@@ -166,7 +156,7 @@ samples_list <- lapply(samples_list, function(x){
 
 
 ###################################################################################################################################################
-## Filtering by linear model (UMIs vs Genes)
+# Filtering by linear model (UMIs vs Genes)
 ###################################################################################################################################################
 
 
@@ -193,7 +183,6 @@ filter_plot_original <- function(seurat_obj, sample_name, threshold = -0.5) {
   return(seurat_obj)
   DefaultAssay(seurat_obj) <- "RNA"
 }
-
 ```
 
 
@@ -201,9 +190,7 @@ filter_plot_original <- function(seurat_obj, sample_name, threshold = -0.5) {
 samples_list <- mapply(function(obj, name) {
   filter_plot_original(obj, sample_name = name)
 }, samples_list, names(samples_list), SIMPLIFY = FALSE)
-
 ```
-
 
 
 # Removing doublets (DoubletFinder)
@@ -311,7 +298,7 @@ run_doublet_all <- function(samples_list) {
 
 
 ```{r}
-# Run the full thing
+# Run doubletfinder over all samples
 results <- run_doublet_all(samples_list)
 
 # Access filtered Seurat objects
@@ -322,7 +309,7 @@ print(results$summary)
 ```
 
 ```{r}
-results$summary %>% as.data.frame %>% writexl::write_xlsx("doubletInfo_Miranda.xlsx")
+results$summary %>% as.data.frame %>% writexl::write_xlsx("doubletInfo.xlsx")
 ```
 
 ```{r}
@@ -343,8 +330,6 @@ Merged_raw_object
 df_Merged_raw_object <- Merged_raw_object@meta.data %>% as.data.frame()
 ## Removing unwanted columns
 df_Merged_raw_object <- df_Merged_raw_object %>% select(orig.ident:Mt_Rb)
-
-
 ```
 
 ```{r}
@@ -352,7 +337,5 @@ Merged_raw_object@meta.data <- df_Merged_raw_object
 ```
 
 ```{r}
-saveRDS(Merged_raw_object, "/home/mhassan/R_Projects/Multiome/Miranda/Merged_raw_object.RDS")
+saveRDS(Merged_raw_object, "Merged_raw_object.RDS")
 ```
-
-
