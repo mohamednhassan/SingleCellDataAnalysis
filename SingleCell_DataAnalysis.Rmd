@@ -1,0 +1,254 @@
+---
+title: "Single cell data analysis"
+date: "`r format(Sys.time(),  '%d %B %Y')`"
+author: "Mohamed Hassan"
+output: 
+  html_notebook:
+    theme: cerulean
+    toc: true
+    toc_depth: 3
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+
+
+```{r}
+library(tidyverse)
+library(Seurat)
+```
+
+
+```{r}
+seuObj <- readRDS("/home/mhassan/R_Projects/Multiome/Adhi/Nature/scAT/seuObj/seuObj.rds")
+seuObj
+```
+
+
+################################################################################
+################################################################################
+
+# Analysis
+
+```{r}
+DefaultAssay(seuObj) <- "RNA"
+```
+
+```{r}
+options(future.globals.maxSize = 3e+09)
+```
+
+
+## Preprocessing the object
+### Log normalize
+```{r}
+seuObj <- NormalizeData(seuObj, normalization.method = "LogNormalize", 
+                             scale.factor = 10000)
+seuObj <-  FindVariableFeatures(seuObj, selection.method = "vst", nfeatures = 2000)
+seuObj <-  ScaleData(seuObj) # add vars.to.regress if you think there is a need for
+```
+
+### SCT
+```{r}
+## If you normalize with SCT (Run this instead of the 3 functions above)
+seuObj <- SCTransform(seuObj)
+```
+
+## Principal Component Analysis
+```{r}
+seuObj<-  RunPCA(seuObj, ndims.print = 1:50)
+```
+
+
+
+```{r}
+ElbowPlot(seuObj, ndims = 50)
+```
+
+
+```{r}
+### Determining the number of significant PCs
+pct <- seuObj@reductions$pca@stdev / sum(seuObj@reductions$pca@stdev) * 100
+cum <- cumsum(pct)
+co1 <- which(cum > 90 & pct < 5)[1]
+co2 <- sort(which((pct[1:length(pct) -1] - pct[2:length(pct)]) > 0.05), decreasing = T)[1] + 1
+pcs = min(co1, co2)
+sig_pcs <- 1:pcs
+sig_pcs
+```
+
+
+```{r}
+seuObj <- FindNeighbors(seuObj, dims = sig_pcs)
+```
+
+```{r}
+seuObj <- RunUMAP(seuObj, dims = sig_pcs)
+```
+
+Check if the data needs to be integrated to remove batch effect
+Could be done using [Seurat's IntegrateLayers](https://satijalab.org/seurat/reference/integratelayers) function with multiple integration methods 
+
+The following integration method functions are available:
+
+    CCAIntegration
+
+    HarmonyIntegration
+
+    JointPCAIntegration
+
+    RPCAIntegration
+
+
+## Data Integration
+```{r}
+obj <- IntegrateLayers(
+  object = seuObj,
+  method = RPCAIntegration,
+  verbose = T
+)
+```
+
+
+```{r}
+seuObj <- FindNeighbors(seuObj,
+                        dims = sig_pcs,
+                        verbose = T)
+```
+
+## Clustering
+```{r, fig.width=12}
+res <- seq(0.1, 1, 0.1)
+seuObj <- FindClusters(seuObj,resolution = res)
+```
+
+### Visualize clustering
+```{r}
+library(clustree)
+clustree(seuObj)
+```
+
+
+```{r, fig.width=20, fig.height=10}
+UMAPPlot(seuObj, 
+         group.by = grep(pattern = "^RNA_snn", 
+                         x = colnames(seuObj@meta.data), value = T), 
+         label = T, ncol = 5) & NoLegend()
+```
+
+
+If you have an excel file with the cell types as columns, and the genes associated with each cell type, you can plot the signature in the UMAP based on these genes
+
+```{r}
+markers <- xlsx::read.xlsx("markers.xlsx", 
+                           sheetIndex = 1)
+
+markers <- lapply(markers, function(x){
+  x <- x[!(is.na(x))]
+})
+```
+
+
+
+## Assiging signatures
+```{r}
+for (cell_type in names(markers)) {
+  
+  # Access gene list for the current cell type
+  current_gene_list <- markers[[cell_type]]
+  
+  # Run AddModuleScore function on the Seurat object for the current cell type's gene list
+  seuObj <- AddModuleScore(object = seuObj,
+                               features = list(current_gene_list),
+                               name = str_c(cell_type, "signature", sep = "_"),
+                               search = T)
+}
+```
+
+
+```{r}
+colnames(seuObj@meta.data) <- gsub(pattern = "_signature1$",
+                                   replacement = "_signature", 
+                                   x=colnames(seuObj@meta.data))
+```
+
+```{r}
+pal <- viridis::viridis(n = 10, option = "C", direction = -1)
+```
+
+
+## Plotting signatures
+```{r, fig.width=14, fig.height=14}
+signature_columns <- colnames(seuObj@meta.data[grep(pattern = "_signature$",
+                                                                    x = colnames(seuObj@meta.data))])
+
+FeaturePlot(seuObj, 
+         features = signature_columns,
+         cols = pal, ncol = 3)
+```
+
+## Running marker genes at a specific resolution
+```{r}
+chosen_res <- ""
+DefaultAssay(seuObj) <- "RNA"
+Idents(seuObj) <- chosen_res
+
+marker_genes <- FindAllMarkers(seuObj,
+                          only.pos = T)
+
+writexl::write_xlsx(as.data.frame(marker_genes),
+                    "marker_genes.xlsx")
+```
+
+## Annotation
+```{r}
+new_names = c(
+    '0'='',
+    '1'='',
+    '2'='',
+    '3'='',
+    '4'='',
+    '5'='',
+    '6'= '',
+    '7'='',
+    '8'='',
+    '9'='',
+    '10'=''
+    )
+Idents(seuratobj) <- chosen_res
+seuratobj$labels <- recode(Idents(seuratobj),
+                           !!!new_names)
+```
+
+## Save the object after analysis
+
+```{r}
+saveRDS(seuObj, "seuObj_analysed.RDS")
+```
+
+
+
+## 2. Subetting a cell type of interest
+```{r}
+"%out%" <- Negate("%in%")
+seuObj
+Idents(seuObj) <- chosen_res
+clusters_of_interest <- c()
+
+seuObj <- subset(seuObj, 
+                      chosen_res %in% clusters_of_interest)
+
+unwanted_clusters <- c()
+seuObj <- subset(seuObj, 
+                      chosen_res %out% unwanted_clusters)
+seuObj
+```
+
+Now repeat all steps starting from normalization
+
+```{r}
+saveRDS(seuObj, "Subet_seuobj.RDS")
+```
+
+
