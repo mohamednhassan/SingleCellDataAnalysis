@@ -199,6 +199,7 @@ if using the new version of DoubletFinder, adjust the functions that end with _v
 ```{r}
 library(progress)
 library(dplyr)
+library(DoubletFinder)
 
 run_doublet_finder_with_stats <- function(seurat_obj, sample_name) {
   message(paste("Running DoubletFinder for:", sample_name))
