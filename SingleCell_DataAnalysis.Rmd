@@ -194,9 +194,8 @@ FeaturePlot(seuObj,
 
 ## Running marker genes at a specific resolution
 ```{r}
-chosen_res <- ""
 DefaultAssay(seuObj) <- "RNA"
-Idents(seuObj) <- chosen_res
+Idents(seuObj) <- seuObj$RNA_snn_resX
 
 marker_genes <- FindAllMarkers(seuObj,
                           only.pos = T)
