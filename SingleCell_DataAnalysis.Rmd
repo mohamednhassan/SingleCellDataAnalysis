@@ -87,6 +87,10 @@ seuObj <- FindNeighbors(seuObj, dims = sig_pcs)
 seuObj <- RunUMAP(seuObj, dims = sig_pcs)
 ```
 
+```{r}
+DimPlot(seuObj, group.by = c("orig.ident"))
+```
+
 Check if the data needs to be integrated to remove batch effect
 Could be done using [Seurat's IntegrateLayers](https://satijalab.org/seurat/reference/integratelayers) function with multiple integration methods 
 
