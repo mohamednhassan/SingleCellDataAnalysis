@@ -21,7 +21,7 @@ library(Seurat)
 
 
 ```{r}
-seuObj <- readRDS("/home/mhassan/R_Projects/Multiome/Adhi/Nature/scAT/seuObj/seuObj.rds")
+seuObj <- readRDS("seuObj.rds")
 seuObj
 ```
 
