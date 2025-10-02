@@ -329,6 +329,8 @@ Merged_raw_object
 # Adding metadata information
 ```{r}
 df_Merged_raw_object <- Merged_raw_object@meta.data %>% as.data.frame()
+df_Merged_raw_object <- df_Merged_raw_object %>% mutate(newcol = case_when(Exist_col == "something" ~ "value",))
+
 ## Removing unwanted columns
 df_Merged_raw_object <- df_Merged_raw_object %>% select(orig.ident:Mt_Rb)
 ```
